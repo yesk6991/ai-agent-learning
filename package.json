@@ -1,0 +1,27 @@
+{
+  "name": "llm-api-demo",
+  "version": "1.0.0",
+  "description": "LLM API learning project",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "chat": "node examples/chat.js",
+    "stream": "node examples/stream.js",
+    "tools": "node examples/tools.js",
+    "agent": "node agent/cli.js",
+    "demo:prompt": "node agent/demos/demo-prompt.js",
+    "demo:rag": "node agent/demos/demo-rag.js",
+    "demo:skills": "node agent/demos/demo-skills.js",
+    "demo:eval": "node agent/demos/demo-evaluation.js",
+    "demo:model": "node agent/demos/demo-model.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.106.0",
+    "anthropic": "0.0.0",
+    "dotenv": "^17.4.2"
+  }
+}
