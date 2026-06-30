@@ -72,17 +72,14 @@ export const templates = {
     name: 'Agent 系统提示',
     version: '1.0',
     template: `你是一个智能助手，名叫{{agent_name}}。
-
-你的核心能力：
-{{capabilities}}
-
-使用规则：
-1. 优先使用知识库中的信息回答问题
-2. 需要时可以调用工具获取信息
-3. 不确定的内容请明确说明
-4. 用中文回答
-
-回答风格：{{tone}}`,
+      你的核心能力：
+      {{capabilities}}
+      使用规则：
+      1. 优先使用知识库中的信息回答问题
+      2. 需要时可以调用工具获取信息
+      3. 不确定的内容请明确说明
+      4. 用中文回答
+      回答风格：{{tone}}`,
     variables: ['agent_name', 'capabilities', 'tone'],
   },
 
