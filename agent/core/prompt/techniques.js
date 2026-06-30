@@ -44,10 +44,9 @@ export const techniques = {
         .join('\n\n');
 
       return `${examplesText}
-
-现在请处理：
-输入: ${question}
-输出:`;
+        现在请处理：
+        输入: ${question}
+        输出:`;
     },
   },
 
@@ -70,10 +69,8 @@ export const techniques = {
       }
       // 完整版：在示例中展示推理过程
       return `请按照"思考过程 → 最终答案"的格式回答问题。
-
-${question}
-
-思考过程：`;
+        ${question}
+        思考过程：`;
     },
   },
 
@@ -97,14 +94,11 @@ ${question}
         : '\n可用工具: 无（纯推理模式）';
 
       return `你需要通过交替进行"思考"和"行动"来回答问题。${toolDesc}
-
-回答格式：
-思考: [分析当前情况，决定下一步]
-行动: [执行的动作，如调用工具]
-
-问题: ${question}
-
-思考:`;
+        回答格式：
+        思考: [分析当前情况，决定下一步]
+        行动: [执行的动作，如调用工具]
+        问题: ${question}
+        思考:`;
     },
   },
 
@@ -122,18 +116,13 @@ ${question}
     apply(question, schema = null) {
       if (schema) {
         return `请严格按照以下 JSON Schema 输出结果，不要输出任何其他内容：
-
-${JSON.stringify(schema, null, 2)}
-
-问题: ${question}
-
-JSON 输出:`;
+          ${JSON.stringify(schema, null, 2)}
+          问题: ${question}
+          JSON 输出:`;
       }
       return `请以 JSON 格式回答以下问题，确保输出是合法的 JSON。
-
-问题: ${question}
-
-JSON 输出:`;
+        问题: ${question}
+        JSON 输出:`;
     },
   },
 

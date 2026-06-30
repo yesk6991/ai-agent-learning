@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -c /Users/didi/Documents/learn/ai-agent-learn/agent/core/llm.js)",
+      "Bash(node -c /Users/didi/Documents/learn/ai-agent-learn/agent/core/skills/executor.js)",
+      "Bash(node -c /Users/didi/Documents/learn/ai-agent-learn/agent/agent.js)",
+      "Bash(node -c /Users/didi/Documents/learn/ai-agent-learn/agent/cli.js)",
+      "Bash(ANTHROPIC_API_KEY='' node --input-type=module -e ' *)",
+      "Bash(node -e ' *)"
+    ]
+  }
+}

@@ -10,7 +10,7 @@
 
 import { render } from './core/prompt/templates.js';
 import { selectModel } from './core/model/selector.js';
-import { runAgentLoop } from './core/skills/executor.js';
+import { runAgentLoop, streamAgentLoop } from './core/skills/executor.js';
 import { registry } from './core/skills/registry.js';
 import { initKnowledgeBase, retrieve, getStatus } from './core/knowledge/local/retriever.js';
 import { getMode } from './core/llm.js';
@@ -153,6 +153,92 @@ export class Agent {
       model,
       stats: result.stats,
     };
+  }
+
+  /**
+   * 与 Agent 流式对话
+   *
+   * 💡 与 chat() 的区别：
+   *   - chat(): 等完整结果后一次性返回
+   *   - chatStream(): 逐 chunk yield，调用方能实时展示"打字机"效果
+   *
+   * 调用方式：
+   *   for await (const chunk of agent.chatStream('你好')) {
+   *     switch (chunk.type) {
+   *       case 'text_delta': process.stdout.write(chunk.text); break;
+   *       case 'tool_call':  console.log('调用工具:', chunk.tool.name); break;
+   *       case 'tool_result': console.log('工具结果:', chunk.result); break;
+   *       case 'done':       console.log('完成'); break;
+   *     }
+   *   }
+   */
+  async *chatStream(userMessage, options = {}) {
+    this.stats.totalMessages++;
+
+    // Step 1: 渲染 System Prompt
+    const capabilities = [
+      '回答各类知识问题',
+      '查询天气信息',
+      '执行数学计算',
+      '搜索知识库',
+      '获取当前时间',
+    ];
+
+    let systemPrompt = render('agent_system', {
+      agent_name: this.name,
+      capabilities: capabilities.join('、'),
+      tone: this.tone,
+    });
+
+    // Step 2: RAG 检索（如果启用）
+    if (this.ragEnabled && this.ragInitialized) {
+      const ragResults = retrieve(userMessage, { topK: 3 });
+
+      if (ragResults.length > 0) {
+        const references = ragResults
+          .map((r, i) => `[${i + 1}] ${r.content}`)
+          .join('\n\n');
+
+        systemPrompt += `\n\n📚 知识库检索结果（请优先参考）:\n${references}`;
+      }
+    }
+
+    // Step 3: 模型选型
+    let model = this.model;
+    if (!model && this.autoSelectModel) {
+      const selection = selectModel(userMessage);
+      model = selection.recommendedModel;
+      if (options.verbose) {
+        console.log(`🤖 模型选型: ${selection.recommendedModel} (${selection.reason})`);
+      }
+    }
+    model = model || 'claude-sonnet-4-6-20250514';
+
+    // Step 4: 运行流式 Agent Loop
+    for await (const chunk of streamAgentLoop({
+      userMessage,
+      system: systemPrompt,
+      model,
+      skillRegistry: registry,
+      onToolCall: (blocks) => {
+        for (const block of blocks) {
+          this.stats.totalToolCalls++;
+          console.log(`  🔧 调用工具: ${block.name}`, JSON.stringify(block.input));
+        }
+      },
+      onToolResult: (name, result) => {
+        console.log(`  ✅ 工具结果: ${name} → ${String(result).slice(0, 80)}...`);
+      },
+      signal: options.signal,
+    })) {
+      // 透传 chunk 给调用方
+      yield chunk;
+
+      // 统计 token
+      if (chunk.type === 'done' && chunk.stats) {
+        this.stats.totalTokens += chunk.stats.totalInputTokens + chunk.stats.totalOutputTokens || 0;
+      }
+    }
   }
 
   /**

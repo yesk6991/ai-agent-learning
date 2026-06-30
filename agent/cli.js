@@ -89,9 +89,18 @@ async function main() {
 
   rl.prompt();
 
+  // 💡 流式对话状态管理
+  // - streaming: 标记是否有对话正在进行，防止 readline close 事件中途杀掉进程
+  // - closed: 标记 stdin 是否已关闭，对话完成后据此决定是否退出
+  // - abortController: 支持 Ctrl+C 取消当前流式输出
+  let streaming = false;
+  let closed = false;
+  let abortController = null;
+
   rl.on('line', async (line) => {
     const input = line.trim();
     if (!input) {
+      if (closed) return;
       rl.prompt();
       return;
     }
@@ -99,23 +108,64 @@ async function main() {
     // 命令处理
     if (input.startsWith('/')) {
       await handleCommand(input, agent, rl);
+      if (closed) return;
       rl.prompt();
       return;
     }
 
-    // 普通对话
-    try {
-      print('\n🤖 思考中...\n', colors.dim);
-      const result = await agent.chat(input);
+    // 普通对话 — 流式输出
+    streaming = true;
+    abortController = new AbortController();
 
-      print(`\n${result.text}\n`, colors.green);
+    try {
+      print('\n🤖 ', colors.dim);
+      let fullText = '';
+      let stats = null;
+      let model = agent.model || 'auto';
+
+      for await (const chunk of agent.chatStream(input, { signal: abortController.signal })) {
+        switch (chunk.type) {
+          case 'text_delta':
+            // 💡 逐 token 实时输出，实现"打字机"效果
+            process.stdout.write(`${colors.green}${chunk.text}${colors.reset}`);
+            fullText += chunk.text;
+            break;
+
+          case 'tool_call':
+            print(`\n  🔧 调用工具: ${chunk.tool.name}(${JSON.stringify(chunk.tool.input)})`, colors.yellow);
+            break;
+
+          case 'tool_result':
+            print(`  ✅ ${String(chunk.result).slice(0, 80)}`, colors.dim);
+            break;
+
+          case 'iteration_start':
+            if (chunk.iteration > 1) {
+              print(`\n🤖 继续思考 (第${chunk.iteration}轮)...`, colors.dim);
+            }
+            break;
+
+          case 'done':
+            stats = chunk.stats;
+            break;
+
+          case 'error':
+            print(`\n❌ 错误: ${chunk.error.message}`, colors.red);
+            break;
+
+          case 'aborted':
+            print('\n⚠️ 已取消', colors.yellow);
+            break;
+        }
+      }
+
+      console.log(); // 换行
 
       // 显示统计
-      const stats = result.stats;
       if (stats) {
         print(
           `📊 迭代: ${stats.iterations} | 工具调用: ${stats.toolCalls.length} | ` +
-          `Tokens: ${stats.totalInputTokens}→${stats.totalOutputTokens} | 模型: ${result.model}`,
+          `Tokens: ${stats.totalInputTokens}→${stats.totalOutputTokens} | 模型: ${model}`,
           colors.dim,
         );
       }
@@ -124,10 +174,27 @@ async function main() {
       print(`\n❌ 错误: ${err.message}\n`, colors.red);
     }
 
+    streaming = false;
+    abortController = null;
+
+    // 💡 如果 stdin 已关闭（管道模式 / 用户 Ctrl+D），对话完成后退出
+    if (closed) {
+      print('\n👋 再见！继续学习 AI 工程化！\n', colors.cyan);
+      process.exit(0);
+    }
+
     rl.prompt();
   });
 
   rl.on('close', () => {
+    // 💡 不再立即 process.exit！
+    // 只标记 stdin 已关闭，让正在进行的流式对话自然完成
+    closed = true;
+    if (streaming) {
+      // 流式对话中 → 让 line 回调的 for-await 循环跑完，它会在结束后退出
+      return;
+    }
+    // 没有进行中的对话 → 安全退出
     print('\n👋 再见！继续学习 AI 工程化！\n', colors.cyan);
     process.exit(0);
   });
