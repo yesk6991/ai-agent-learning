@@ -1,20 +1,3 @@
-// 💡 学习要点：向量存储是 RAG 的"数据库"
-// 在生产环境中，你会用到 Pinecone、Chroma、Weaviate 等专业向量数据库
-// 这里用内存存储来演示核心概念，零依赖
-
-/**
- * 内存向量存储
- *
- * 💡 为什么需要向量存储？
- * - RAG 需要快速找到与查询最相似的文档
- * - 向量数据库支持高效的相似度搜索
- * - 生产级方案支持百万级甚至亿级向量
- *
- * 本实现：
- * - 内存存储，进程结束数据消失
- * - 全量扫描计算相似度（O(n)，适合学习）
- * - 生产环境用 ANN（近似最近邻）索引，复杂度 O(log n)
- */
 export class Store {
   constructor() {
     this.documents = [];
@@ -77,18 +60,69 @@ export class Store {
   }
 
   /**
-   * 💡 进阶方法：批量添加
-   * 在真实场景中，批量操作可以优化性能
+   * 批量添加
    */
   addBatch(docs) {
     return docs.map(doc => this.add(doc));
   }
 
   /**
-   * 💡 进阶方法：按元数据过滤
-   * 支持 "只在某个来源的文档中搜索"
+   * 按元数据过滤
    */
   filterByMetadata(predicate) {
     return this.documents.filter(d => predicate(d.metadata));
   }
+
+  /**
+   * 向量相似度检索
+   * 用余弦相似度在所有文档中找与 queryVector 最相似的 topK 个
+   *
+   * @param {number[]} queryVector - 查询向量
+   * @param {object} options
+   * @param {number} options.topK - 返回最相似的 K 个结果
+   * @param {number} options.minScore - 最低相似度阈值
+   * @returns {Array<{id: number, content: string, score: number, metadata: object}>}
+   */
+  search(queryVector, { topK = 3, minScore = 0.01 } = {}) {
+    const scored = this.documents
+      .map(doc => ({
+        id: doc.id,
+        content: doc.content,
+        score: cosineSimilarity(queryVector, doc.vector),
+        metadata: doc.metadata,
+      }))
+      .filter(d => d.score >= minScore)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, topK);
+
+    return scored;
+  }
+}
+
+/**
+ * 余弦相似度
+ * 衡量两个向量方向的相似性，值域 [-1, 1]
+ * 1 = 方向完全相同，0 = 无关，-1 = 方向相反
+ */
+function cosineSimilarity(a, b) {
+  if (a.length !== b.length) {
+    throw new Error(`向量维度不匹配: ${a.length} vs ${b.length}`);
+  }
+
+  let dotProduct = 0;
+  let normA = 0;
+  let normB = 0;
+
+  for (let i = 0; i < a.length; i++) {
+    dotProduct += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+
+  normA = Math.sqrt(normA);
+  normB = Math.sqrt(normB);
+
+  if (normA === 0 || normB === 0) return 0;
+
+  return dotProduct / (normA * normB);
 }

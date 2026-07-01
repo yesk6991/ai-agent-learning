@@ -6,7 +6,8 @@
 
 import { chunk, fixedSizeChunk, semanticChunk } from '../core/knowledge/local/chunker.js';
 import { TFIDFEmbedder } from '../core/knowledge/local/embedder.js';
-import { initKnowledgeBase, retrieve, getStatus, cosineSimilarity } from '../core/knowledge/local/retriever.js';
+import { initKnowledgeBase, retrieve, getStatus } from '../core/knowledge/local/retriever.js';
+import { Store } from '../core/knowledge/local/store.js';
 
 console.log('='.repeat(60));
 console.log('📚 RAG 知识库检索演示');
@@ -75,6 +76,9 @@ docs.forEach((doc, i) => {
 // ========== 3. 相似度计算演示 ==========
 console.log('\n\n🔍 Step 3: 相似度计算\n');
 
+// 用临时 Store 来计算两段文本的相似度
+const tmpStore = new Store();
+
 const pairs = [
   ['RAG 是检索增强生成技术', '文档分块是 RAG 的第一步'],
   ['RAG 是检索增强生成技术', '今天天气真好'],
@@ -82,9 +86,11 @@ const pairs = [
 ];
 
 for (const [a, b] of pairs) {
-  const vecA = embedder.transform(a);
-  const vecB = embedder.transform(b);
-  const sim = cosineSimilarity(vecA, vecB);
+  // 把 b 存入 Store，用 a 的向量去搜索
+  tmpStore.clear();
+  tmpStore.add({ content: b, vector: embedder.transform(b) });
+  const results = tmpStore.search(embedder.transform(a), { topK: 1 });
+  const sim = results[0]?.score ?? 0;
   console.log(`  "${a}" vs "${b}"`);
   console.log(`  相似度: ${sim.toFixed(4)} ${sim > 0.3 ? '✅ 相关' : '❌ 不相关'}\n`);
 }
