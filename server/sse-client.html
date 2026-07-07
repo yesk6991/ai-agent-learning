@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SSE 流式输出演示</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      padding: 16px 24px;
+      background: #16213e;
+      border-bottom: 1px solid #0f3460;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    header h1 { font-size: 18px; color: #00d2ff; }
+    .mode-tag {
+      padding: 2px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .mode-mock { background: #ffa500; color: #1a1a2e; }
+    .mode-live { background: #00c853; color: #1a1a2e; }
+    #chat-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .message {
+      max-width: 80%;
+      padding: 12px 16px;
+      border-radius: 12px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .message-user {
+      align-self: flex-end;
+      background: #0f3460;
+      border-bottom-right-radius: 4px;
+    }
+    .message-assistant {
+      align-self: flex-start;
+      background: #16213e;
+      border: 1px solid #0f3460;
+      border-bottom-left-radius: 4px;
+    }
+    .message-assistant .cursor {
+      display: inline-block;
+      width: 2px;
+      height: 1em;
+      background: #00d2ff;
+      animation: blink 1s step-end infinite;
+      vertical-align: text-bottom;
+      margin-left: 2px;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+    .stats {
+      font-size: 12px;
+      color: #666;
+      margin-top: 4px;
+    }
+    #input-area {
+      padding: 16px 24px;
+      background: #16213e;
+      border-top: 1px solid #0f3460;
+      display: flex;
+      gap: 12px;
+    }
+    #input-area input {
+      flex: 1;
+      padding: 12px 16px;
+      border-radius: 8px;
+      border: 1px solid #0f3460;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      font-size: 14px;
+      outline: none;
+    }
+    #input-area input:focus { border-color: #00d2ff; }
+    #input-area button {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 8px;
+      background: #00d2ff;
+      color: #1a1a2e;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    #input-area button:hover { background: #00b8d4; }
+    #input-area button:disabled { background: #555; cursor: not-allowed; }
+    #input-area select {
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: 1px solid #0f3460;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>SSE 流式输出演示</h1>
+    <span id="mode-tag" class="mode-tag mode-mock">Mock</span>
+    <select id="endpoint-select">
+      <option value="/chat/mock">Mock 模式（无需 Key）</option>
+      <option value="/chat/stream">真实 LLM（需要 Key）</option>
+    </select>
+  </header>
+
+  <div id="chat-container"></div>
+
+  <div id="input-area">
+    <input id="user-input" type="text" placeholder="输入消息，按回车发送..." autofocus />
+    <button id="send-btn">发送</button>
+  </div>
+
+  <script>
+    const chatContainer = document.getElementById('chat-container');
+    const userInput = document.getElementById('user-input');
+    const sendBtn = document.getElementById('send-btn');
+    const endpointSelect = document.getElementById('endpoint-select');
+    const modeTag = document.getElementById('mode-tag');
+
+    endpointSelect.addEventListener('change', () => {
+      const isMock = endpointSelect.value.includes('mock');
+      modeTag.textContent = isMock ? 'Mock' : 'Live';
+      modeTag.className = `mode-tag ${isMock ? 'mode-mock' : 'mode-live'}`;
+    });
+
+    let streaming = false;
+
+    function appendMessage(role, text) {
+      const div = document.createElement('div');
+      div.className = `message message-${role}`;
+      div.textContent = text;
+      chatContainer.appendChild(div);
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+      return div;
+    }
+
+    function createAssistantMessage() {
+      const div = document.createElement('div');
+      div.className = 'message message-assistant';
+      const cursor = document.createElement('span');
+      cursor.className = 'cursor';
+      div.appendChild(cursor);
+      chatContainer.appendChild(div);
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+      return { div, cursor };
+    }
+
+    async function sendMessage() {
+      const text = userInput.value.trim();
+      if (!text || streaming) return;
+
+      streaming = true;
+      sendBtn.disabled = true;
+      userInput.value = '';
+
+      // 显示用户消息
+      appendMessage('user', text);
+
+      // 创建助手消息容器
+      const { div, cursor } = createAssistantMessage();
+      let fullText = '';
+      let startTime = Date.now();
+      let tokenCount = 0;
+
+      try {
+        const endpoint = endpointSelect.value;
+        let response;
+
+        if (endpoint === '/chat/mock') {
+          // Mock 端点：只需要 prompt
+          response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: text }),
+          });
+        } else {
+          // 真实 LLM 端点：需要 messages 格式
+          response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              messages: [{ role: 'user', content: text }],
+            }),
+          });
+        }
+
+        if (!response.ok) {
+          const err = await response.json();
+          fullText = `错误: ${err.error || response.statusText}`;
+          div.textContent = fullText;
+          return;
+        }
+
+        // 读取 SSE 流
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+
+          // SSE 格式：data: <JSON>\n\n
+          const lines = buffer.split('\n\n');
+          buffer = lines.pop(); // 最后一段可能不完整，留着下次拼
+
+          for (const line of lines) {
+            const match = line.match(/^data:\s*(.+)$/m);
+            if (!match) continue;
+
+            let event;
+            try { event = JSON.parse(match[1]); } catch { continue; }
+
+            switch (event.type) {
+              case 'text_delta':
+                fullText += event.text;
+                tokenCount++;
+                // 移除旧光标，添加文本，再添加新光标
+                cursor.remove();
+                div.appendChild(document.createTextNode(event.text));
+                div.appendChild(cursor);
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+                break;
+
+              case 'tool_call':
+                fullText += `\n🔧 调用工具: ${event.tool.name}(${JSON.stringify(event.tool.input)})`;
+                cursor.remove();
+                div.textContent = fullText;
+                div.appendChild(cursor);
+                break;
+
+              case 'done': {
+                cursor.remove();
+                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+                const stats = document.createElement('div');
+                stats.className = 'stats';
+                const usage = event.usage || {};
+                stats.textContent = `⏱ ${elapsed}s | 输入: ${usage.input_tokens || '?'} 输出: ${usage.output_tokens || '?'} tokens`;
+                div.appendChild(stats);
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+                break;
+              }
+
+              case 'error':
+                cursor.remove();
+                fullText += `\n❌ ${event.error.message}`;
+                div.textContent = fullText;
+                break;
+            }
+          }
+        }
+      } catch (err) {
+        cursor.remove();
+        div.textContent = fullText || `连接错误: ${err.message}`;
+      } finally {
+        streaming = false;
+        sendBtn.disabled = false;
+        userInput.focus();
+      }
+    }
+
+    sendBtn.addEventListener('click', sendMessage);
+    userInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+  </script>
+</body>
+</html>

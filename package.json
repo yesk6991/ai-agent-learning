@@ -10,6 +10,7 @@
     "stream": "node examples/stream.js",
     "tools": "node examples/tools.js",
     "agent": "node agent/cli.js",
+    "sse": "node server/sse-server.js",
     "demo:prompt": "node agent/demos/demo-prompt.js",
     "demo:rag": "node agent/demos/demo-rag.js",
     "demo:skills": "node agent/demos/demo-skills.js",
