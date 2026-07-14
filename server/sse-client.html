@@ -115,7 +115,7 @@
 </head>
 <body>
   <header>
-    <h1>SSE 流式输出演示</h1>
+    <h1>SSE 流式输出演示，npm run sse 运行脚本</h1>
     <span id="mode-tag" class="mode-tag mode-mock">Mock</span>
     <select id="endpoint-select">
       <option value="/chat/mock">Mock 模式（无需 Key）</option>
@@ -131,70 +131,107 @@
   </div>
 
   <script>
-    const chatContainer = document.getElementById('chat-container');
-    const userInput = document.getElementById('user-input');
-    const sendBtn = document.getElementById('send-btn');
-    const endpointSelect = document.getElementById('endpoint-select');
-    const modeTag = document.getElementById('mode-tag');
+    // ================================================================
+    // 1. 获取 DOM 元素引用
+    // ================================================================
+    const chatContainer = document.getElementById('chat-container');  // 聊天消息区域
+    const userInput = document.getElementById('user-input');          // 输入框
+    const sendBtn = document.getElementById('send-btn');              // 发送按钮
+    const endpointSelect = document.getElementById('endpoint-select'); // 端点选择下拉框
+    const modeTag = document.getElementById('mode-tag');              // 顶部模式标签
 
+    // 切换端点时，更新顶部模式标签的样式和文字
     endpointSelect.addEventListener('change', () => {
       const isMock = endpointSelect.value.includes('mock');
       modeTag.textContent = isMock ? 'Mock' : 'Live';
       modeTag.className = `mode-tag ${isMock ? 'mode-mock' : 'mode-live'}`;
     });
 
+    // 流式输出进行中标记，防止重复发送
     let streaming = false;
 
+    // ================================================================
+    // 2. DOM 操作辅助函数
+    // ================================================================
+
+    /**
+     * 向聊天区追加一条完整消息（用户消息 / 最终错误消息）
+     * @param {'user'|'assistant'} role - 消息角色
+     * @param {string} text - 消息文本
+     */
     function appendMessage(role, text) {
       const div = document.createElement('div');
       div.className = `message message-${role}`;
       div.textContent = text;
       chatContainer.appendChild(div);
+      // 自动滚动到底部
       chatContainer.scrollTop = chatContainer.scrollHeight;
       return div;
     }
 
+    /**
+     * 创建助手消息容器（带闪烁光标）
+     * 先创建空容器 + 光标，后续流式到达的 text_delta 逐字追加进去
+     * @returns {{ div: HTMLDivElement, cursor: HTMLSpanElement }}
+     */
     function createAssistantMessage() {
       const div = document.createElement('div');
       div.className = 'message message-assistant';
       const cursor = document.createElement('span');
-      cursor.className = 'cursor';
+      cursor.className = 'cursor';  // CSS 定义了闪烁动画
       div.appendChild(cursor);
       chatContainer.appendChild(div);
       chatContainer.scrollTop = chatContainer.scrollHeight;
       return { div, cursor };
     }
 
+    // ================================================================
+    // 3. 核心逻辑：发送消息 + 消费 SSE 流
+    // ================================================================
+
+    /**
+     * 发送消息主流程：
+     *   用户输入 → fetch POST → 读取 SSE 流 → 逐事件更新 DOM
+     *
+     * SSE 流的读取方式（非 EventSource，因为需要 POST）：
+     *   1. fetch 返回 response 后，拿到 response.body（ReadableStream）
+     *   2. 用 getReader() 逐块读取
+     *   3. 手动解析 "data: <JSON>\n\n" 格式
+     *   4. 按 event.type 分发到不同的 DOM 更新逻辑
+     */
     async function sendMessage() {
       const text = userInput.value.trim();
+      // 空消息或正在流式输出中，不处理
       if (!text || streaming) return;
 
       streaming = true;
-      sendBtn.disabled = true;
-      userInput.value = '';
+      sendBtn.disabled = true;  // 防止连续点击
+      userInput.value = '';     // 清空输入框
 
-      // 显示用户消息
+      // 显示用户消息气泡
       appendMessage('user', text);
 
-      // 创建助手消息容器
+      // 创建助手消息气泡（带光标，等流式数据填充）
       const { div, cursor } = createAssistantMessage();
-      let fullText = '';
-      let startTime = Date.now();
-      let tokenCount = 0;
+      let fullText = '';       // 累积的完整文本（用于 tool_call 等需要重写整个内容的场景）
+      let startTime = Date.now();  // 计时起点
+      let tokenCount = 0;      // token 计数
 
       try {
+        // ── 根据选择的端点构造不同的请求体 ──
         const endpoint = endpointSelect.value;
         let response;
 
         if (endpoint === '/chat/mock') {
-          // Mock 端点：只需要 prompt
+          // Mock 端点：请求体是 { prompt } 格式，简单直接
           response = await fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ prompt: text }),
           });
         } else {
-          // 真实 LLM 端点：需要 messages 格式
+          // 真实 LLM 端点：请求体是 Anthropic messages 格式
+          // { messages: [{ role, content }] }
           response = await fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -204,6 +241,7 @@
           });
         }
 
+        // ── 处理 HTTP 错误（4xx / 5xx） ──
         if (!response.ok) {
           const err = await response.json();
           fullText = `错误: ${err.error || response.statusText}`;
@@ -211,48 +249,66 @@
           return;
         }
 
-        // 读取 SSE 流
+        // ── 读取 SSE 流 ──
+        // fetch + ReadableStream 方式（而非 EventSource）
+        // 因为 EventSource 只支持 GET 请求，这里需要 POST
         const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
+        const decoder = new TextDecoder();  // 将 Uint8Array 解码为字符串
+        let buffer = '';  // 未解析完的数据缓冲区
 
+        // 循环读取，直到流结束（done === true）
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
+          // value 是 Uint8Array，解码为字符串拼入缓冲区
+          // { stream: true } 表示可能还有后续数据，处理多字节字符（如中文 UTF-8）
           buffer += decoder.decode(value, { stream: true });
 
-          // SSE 格式：data: <JSON>\n\n
+          // SSE 协议：每条事件以 \n\n 分隔
+          // 例如服务端发送：
+          //   data: {"type":"text_delta","text":"你好"}\n\n
+          //   data: {"type":"text_delta","text":"！"}\n\n
           const lines = buffer.split('\n\n');
-          buffer = lines.pop(); // 最后一段可能不完整，留着下次拼
+          // 最后一段可能是不完整的事件（还没收到结尾的 \n\n）
+          // 留在 buffer 里等下次 reader.read() 后拼接
+          buffer = lines.pop();
 
           for (const line of lines) {
+            // 用正则提取 "data: " 后面的 JSON 内容
             const match = line.match(/^data:\s*(.+)$/m);
             if (!match) continue;
 
             let event;
             try { event = JSON.parse(match[1]); } catch { continue; }
 
+            // ── 根据事件类型更新 UI ──
             switch (event.type) {
+
+              // 文本增量：最常见的事件，每次到达几个字
               case 'text_delta':
                 fullText += event.text;
                 tokenCount++;
-                // 移除旧光标，添加文本，再添加新光标
+                // DOM 操作：移除光标 → 追加文字 → 重新插入光标
+                // 这样光标始终在最新文字后面，形成"打字机"效果
                 cursor.remove();
                 div.appendChild(document.createTextNode(event.text));
                 div.appendChild(cursor);
                 chatContainer.scrollTop = chatContainer.scrollHeight;
                 break;
 
+              // 工具调用：LLM 决定调用工具（如查天气、做计算）
               case 'tool_call':
                 fullText += `\n🔧 调用工具: ${event.tool.name}(${JSON.stringify(event.tool.input)})`;
+                // tool_call 需要重写整个文本（因为之前是逐字追加的 DOM 节点）
                 cursor.remove();
                 div.textContent = fullText;
                 div.appendChild(cursor);
                 break;
 
+              // 流结束：显示统计信息
               case 'done': {
-                cursor.remove();
+                cursor.remove();  // 移除闪烁光标，表示输出完成
                 const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
                 const stats = document.createElement('div');
                 stats.className = 'stats';
@@ -263,6 +319,7 @@
                 break;
               }
 
+              // 错误事件
               case 'error':
                 cursor.remove();
                 fullText += `\n❌ ${event.error.message}`;
@@ -272,19 +329,28 @@
           }
         }
       } catch (err) {
+        // 网络断开、fetch 失败等异常
         cursor.remove();
         div.textContent = fullText || `连接错误: ${err.message}`;
       } finally {
+        // 无论成功失败，恢复 UI 状态
         streaming = false;
         sendBtn.disabled = false;
-        userInput.focus();
+        userInput.focus();  // 重新聚焦输入框，方便继续对话
       }
     }
 
+    // ================================================================
+    // 4. 事件绑定
+    // ================================================================
+
+    // 点击发送按钮
     sendBtn.addEventListener('click', sendMessage);
+
+    // 回车发送（Shift+Enter 换行，单独 Enter 发送）
     userInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
+        e.preventDefault();  // 阻止默认的换行行为
         sendMessage();
       }
     });
